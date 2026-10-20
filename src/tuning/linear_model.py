@@ -55,6 +55,7 @@ def main():
                 model=LinearModel(task=args.task, **params),
                 task=args.task,
                 verbose=True,
+                data_mode=args.data_mode,
             )
         )
 

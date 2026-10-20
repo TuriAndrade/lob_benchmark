@@ -94,6 +94,12 @@ def arguments(normalize_default=False, sequence=False):
             action=argparse.BooleanOptionalAction,
             default=False,
         )
+    else:
+        parser.add_argument(
+            "--data-mode",
+            choices=["load", "stream"],
+            default="load",
+        )
 
     args = parser.parse_args()
 
