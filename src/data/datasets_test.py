@@ -9,8 +9,8 @@ import torch
 from dotenv import load_dotenv
 from torch.utils.data import DataLoader
 
-from schema import BookSnapshotSchema
-from datasets import TabularDataset, SequenceDataset
+from .schema import BookSnapshotSchema
+from .datasets import TabularDataset, SequenceDataset
 
 load_dotenv()
 

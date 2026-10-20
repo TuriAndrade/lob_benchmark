@@ -4,11 +4,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import torch
 from torch.utils.data import IterableDataset, get_worker_info
-
-try:
-    from .schema import BookSnapshotSchema
-except ImportError:
-    from schema import BookSnapshotSchema
+from .schema import BookSnapshotSchema
 
 
 def _features(schema, include_raw=False, include_engineered=True):
@@ -161,7 +157,9 @@ class TabularDataset:
         self.threshold_bps = threshold_bps
         self.read_batch_size = read_batch_size
 
-        _, self.engineered = _features(self.schema, include_raw=False, include_engineered=True)
+        _, self.engineered = _features(
+            self.schema, include_raw=False, include_engineered=True
+        )
         self.feature_columns = tuple(self.engineered)
 
         self.mean = None if mean is None else np.asarray(mean, np.float32)
