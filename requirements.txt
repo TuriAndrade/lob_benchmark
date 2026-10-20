@@ -1,0 +1,9 @@
+polars
+python-dotenv
+numpy
+pyarrow
+torch
+scikit-learn
+lightgbm
+joblib
+pytest
