@@ -332,8 +332,6 @@ class SequenceDataset(IterableDataset):
             )
         if not isinstance(rank, int) or not 0 <= rank < world_size:
             raise ValueError("rank must be between 0 and world_size - 1")
-        if shuffle and not drop_last and world_size > 1:
-            raise ValueError("Distributed shuffled training requires drop_last=True")
 
         self.files, self.raw_columns, self.engineered_columns = _inspect_files(
             paths, horizon
@@ -384,7 +382,7 @@ class SequenceDataset(IterableDataset):
         elif world_size > 1:
             if self.total < world_size:
                 raise ValueError(
-                    "Distributed evaluation needs at least one example per rank"
+                    "Distributed execution needs at least one example per rank"
                 )
             self.rank_start = rank * (self.total // world_size) + min(
                 rank, self.total % world_size
@@ -395,6 +393,11 @@ class SequenceDataset(IterableDataset):
             self.n_batches = (
                 (self.total + world_size - 1) // world_size + batch_size - 1
             ) // batch_size
+
+            if self.rank_count < self.n_batches:
+                raise ValueError(
+                    "Insufficient samples per rank for nonempty distributed batches"
+                )
         if self.n_batches == 0:
             raise ValueError(
                 "Not enough eligible endpoints to form distributed batches"
@@ -531,21 +534,29 @@ class SequenceDataset(IterableDataset):
         worker_id, n_workers = (
             (0, 1) if worker is None else (worker.id, worker.num_workers)
         )
+
         if not self.drop_last and self.world_size > 1:
             sizes = np.full(
                 self.n_batches, self.rank_count // self.n_batches, dtype=np.int64
             )
             sizes[: self.rank_count % self.n_batches] += 1
             starts = self.rank_start + np.r_[0, np.cumsum(sizes[:-1])]
-            ranges = zip(
-                starts[worker_id::n_workers], (starts + sizes)[worker_id::n_workers]
-            )
+
+            batch_ids = np.arange(self.n_batches)
+            if self.shuffle:
+                batch_ids = np.random.default_rng(
+                    self.seed + self.epoch + self.rank
+                ).permutation(batch_ids)
+
+            batch_ids = batch_ids[worker_id::n_workers]
+            ranges = zip(starts[batch_ids], (starts + sizes)[batch_ids])
         else:
             batch_ids = np.arange(self.available_batches, dtype=np.int64)
             if self.shuffle:
                 batch_ids = np.random.default_rng(self.seed + self.epoch).permutation(
                     batch_ids
                 )
+
             batch_ids = batch_ids[: self.n_batches][self.rank :: self.world_size]
             ranges = (
                 (
