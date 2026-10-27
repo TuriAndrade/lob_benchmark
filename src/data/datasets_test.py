@@ -27,7 +27,7 @@ WINDOW = 20
 READ_SIZE = 31  # Deliberately smaller than the window plus several batches.
 
 
-def _write_h5(path, n, date="2020-09-01", gaps=True):
+def _write_h5_fixture(path, n, date="2020-09-01", gaps=True):
     """Small deterministic fixture with the exact converter layout."""
     schema = BookSnapshotSchema(
         depth=5,
@@ -103,12 +103,14 @@ def _write_h5(path, n, date="2020-09-01", gaps=True):
 
 @pytest.fixture(scope="module")
 def sample(tmp_path_factory):
-    return _write_h5(tmp_path_factory.mktemp("lob") / "day1.h5", 750)
+    return _write_h5_fixture(tmp_path_factory.mktemp("lob") / "day1.h5", 750)
 
 
 @pytest.fixture(scope="module")
 def two_files(sample, tmp_path_factory):
-    second = _write_h5(tmp_path_factory.mktemp("lob") / "day2.h5", 390, "2020-09-02")
+    second = _write_h5_fixture(
+        tmp_path_factory.mktemp("lob") / "day2.h5", 390, "2020-09-02"
+    )
     return [sample, second]
 
 
@@ -480,7 +482,7 @@ def benchmark_path(tmp_path_factory):
         if not path.is_file():
             pytest.fail(f"LOB_BENCHMARK_PATH does not exist: {path}")
         return path, "REAL HDF5"
-    return _write_h5(
+    return _write_h5_fixture(
         tmp_path_factory.mktemp("lob_bench") / "benchmark.h5", 60_000, gaps=False
     ), "SYNTHETIC HDF5"
 

@@ -83,15 +83,19 @@ def prepare_model(model, context, precision="fp32"):
         raise RuntimeError("BF16 requires a CUDA device with BF16 support")
 
     if context.mode == "fsdp":
+        from torch.distributed.device_mesh import init_device_mesh
         from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
+        mesh = init_device_mesh(context.device.type, (context.world_size,))
         policy = MixedPrecisionPolicy(
             param_dtype=torch.bfloat16 if precision == "bf16" else None,
             reduce_dtype=torch.float32 if precision == "bf16" else None,
         )
+
         for block in model.fsdp_modules() if hasattr(model, "fsdp_modules") else ():
-            fully_shard(block, mp_policy=policy)
-        fully_shard(model, mp_policy=policy)
+            fully_shard(block, mesh=mesh, mp_policy=policy)
+
+        fully_shard(model, mesh=mesh, mp_policy=policy)
         return model
 
     model = model.to(context.device)
