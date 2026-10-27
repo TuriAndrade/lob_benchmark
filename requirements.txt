@@ -7,3 +7,4 @@ scikit-learn
 lightgbm
 joblib
 pytest
+h5py
