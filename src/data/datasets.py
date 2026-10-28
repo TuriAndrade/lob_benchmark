@@ -27,7 +27,7 @@ def _inspect_files(paths, horizon):
 
     for path in map(Path, paths):
         with h5py.File(path, "r") as h5:
-            attrs = h5["attributes"].attrs
+            attrs = h5.attrs
             raw = _names(attrs, "raw_feature_names")
             engineered = _names(attrs, "engineered_feature_names")
             horizons = tuple(int(h) for h in attrs["horizons"])

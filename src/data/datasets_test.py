@@ -73,7 +73,7 @@ def _write_h5_fixture(path, n, date="2020-09-01", gaps=True):
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "w") as h5:
-        attrs = h5.create_group("attributes").attrs
+        attrs = h5.attrs
         for name, value in schema.attributes.items():
             if isinstance(value, list):
                 attrs[name] = np.asarray(value, dtype=h5py.string_dtype("utf-8"))
@@ -119,7 +119,7 @@ def _reference(
 ):
     """Independent, straightforward eligibility reference (test-sized files)."""
     with h5py.File(path) as h5:
-        h = list(h5["attributes"].attrs["horizons"]).index(horizon)
+        h = list(h5.attrs["horizons"]).index(horizon)
         raw = h5["raw_features"][:]
         eng = h5["engineered_features"][:]
         target = h5["targets"][:, h]
@@ -155,7 +155,7 @@ def test_tabular_features_targets_metadata(sample):
     ds = TabularDataset([sample], horizon=HORIZON, read_batch_size=READ_SIZE)
     x, y, meta = ds.load()
     with h5py.File(sample) as h5:
-        h = list(h5["attributes"].attrs["horizons"]).index(HORIZON)
+        h = list(h5.attrs["horizons"]).index(HORIZON)
         features = h5["engineered_features"][:]
         targets = h5["targets"][:, h]
         expected = np.flatnonzero(
@@ -513,7 +513,7 @@ def test_batch_streaming_timing(benchmark_path):
     """Run with pytest -s to display observed per-batch times; no speed threshold."""
     path, label = benchmark_path
     with h5py.File(path) as h5:
-        available = tuple(int(v) for v in h5["attributes"].attrs["horizons"])
+        available = tuple(int(v) for v in h5.attrs["horizons"])
     horizon = HORIZON if HORIZON in available else available[0]
     batch_size = 256
     read_size = batch_size  # Comparable tabular and sequence output batch sizes.
