@@ -5,11 +5,11 @@ load_dotenv()
 import argparse
 import sys
 
-from tuning import models
+from src.tuning import models
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--model", required=True, choices=models)
 
     args, remaining = parser.parse_known_args()

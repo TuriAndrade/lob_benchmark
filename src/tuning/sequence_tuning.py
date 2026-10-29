@@ -4,9 +4,8 @@ from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 
-from data import SequenceDataset
-from trainers import SequenceTrainer, SequenceTrainerConfig
-from trainers.distributed import setup_distributed
+from ..data import SequenceDataset
+from ..trainers import SequenceTrainer, SequenceTrainerConfig, setup_distributed
 
 from .common import paths, prepare_dir, save_results, set_seed, summary
 

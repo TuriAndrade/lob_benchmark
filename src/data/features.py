@@ -1,7 +1,7 @@
 import polars as pl
 
 
-class BookSnapshotFeatures:
+class LOBSnapshotFeatures:
     """Causal market microstructure features expressed as Polars expressions."""
 
     @staticmethod
@@ -22,14 +22,14 @@ class BookSnapshotFeatures:
 
     @staticmethod
     def imbalance(bids: list[pl.Expr], asks: list[pl.Expr]) -> pl.Expr:
-        bid, ask = BookSnapshotFeatures.depth(bids), BookSnapshotFeatures.depth(asks)
-        return BookSnapshotFeatures.ratio(bid - ask, bid + ask)
+        bid, ask = LOBSnapshotFeatures.depth(bids), LOBSnapshotFeatures.depth(asks)
+        return LOBSnapshotFeatures.ratio(bid - ask, bid + ask)
 
     @staticmethod
     def microprice(
         ask: pl.Expr, bid: pl.Expr, ask_size: pl.Expr, bid_size: pl.Expr
     ) -> pl.Expr:
-        return BookSnapshotFeatures.ratio(
+        return LOBSnapshotFeatures.ratio(
             ask * bid_size + bid * ask_size, bid_size + ask_size
         )
 
@@ -66,6 +66,6 @@ class BookSnapshotFeatures:
 
     @staticmethod
     def event_rate(timestamp_us: pl.Expr, window: int) -> pl.Expr:
-        return BookSnapshotFeatures.ratio(
+        return LOBSnapshotFeatures.ratio(
             pl.lit(window * 1_000_000), timestamp_us - timestamp_us.shift(window)
         )

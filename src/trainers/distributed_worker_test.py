@@ -2,18 +2,15 @@
 
 import os
 import sys
-from pathlib import Path
 
 import numpy as np
 import torch
 import torch.distributed as dist
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from ..data import SequenceDataset
+from ..models import TCNModel
 
-from data import SequenceDataset
-from models import TCNModel
-
-from trainers import SequenceTrainer, SequenceTrainerConfig
+from .sequence_trainer import SequenceTrainer, SequenceTrainerConfig
 
 
 def main():

@@ -5,7 +5,7 @@ from typing import ClassVar
 
 
 @dataclass(frozen=True)
-class BookSnapshotSchema:
+class LOBSnapshotSchema:
     depth: int
     exchange: str
     symbol: str

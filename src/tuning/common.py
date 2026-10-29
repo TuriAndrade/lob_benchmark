@@ -11,9 +11,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from dotenv import load_dotenv
-
-load_dotenv()
 
 
 def paths(data_path, depth=5, horizon=50, n_train_days=4, n_val_days=1, n_test_days=1):
@@ -77,7 +74,7 @@ def set_seed(seed):
 
 
 def arguments(normalize_default=False, sequence=False):
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--data-path", type=Path, required=True)
     parser.add_argument("--save-dir", type=Path)
     parser.add_argument(

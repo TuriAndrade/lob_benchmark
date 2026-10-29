@@ -1,6 +1,6 @@
 """TCN tuning configuration."""
 
-from models import TCNModel
+from ..models import TCNModel
 
 from .common import arguments, grid_search, tuning_kwargs
 from .sequence_tuning import SequenceTuning
@@ -20,7 +20,7 @@ def main():
             )
         ),
         trainer_params=[
-            dict(epochs=100, patience=5, weight_decay=1e-4, **params)
+            dict(epochs=2, patience=5, weight_decay=1e-4, **params)
             for params in grid_search({"lr": [1e-4, 1e-3]})
         ],
         **tuning_kwargs(args, "tcn"),

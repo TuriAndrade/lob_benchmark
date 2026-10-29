@@ -1,8 +1,3 @@
-from dotenv import load_dotenv
-
-load_dotenv()
-
-import argparse
 import gzip
 import os
 import shutil
@@ -15,15 +10,11 @@ import h5py
 import numpy as np
 import polars as pl
 
-try:
-    from .features import BookSnapshotFeatures as F
-    from .schema import BookSnapshotSchema
-except ImportError:
-    from features import BookSnapshotFeatures as F
-    from schema import BookSnapshotSchema
+from .features import LOBSnapshotFeatures as F
+from .schema import LOBSnapshotSchema as S
 
 
-class TardisBookSnapshot:
+class TardisLOBSnapshot:
     def __init__(
         self,
         data_dir: str | Path | None = None,
@@ -36,7 +27,7 @@ class TardisBookSnapshot:
         event_rate_window: int = 50,
     ):
         self.root = (
-            Path(data_dir or os.environ.get("DATA_DIR", "./")) / "tardis_book_snapshot"
+            Path(data_dir or os.environ.get("DATA_DIR", "./")) / "tardis_lob_snapshot"
         )
         self.options = {
             "horizons": tuple(sorted(horizons)),
@@ -48,7 +39,7 @@ class TardisBookSnapshot:
             "event_rate_window": event_rate_window,
         }
 
-    def _paths(self, url: str) -> tuple[Path, Path, BookSnapshotSchema]:
+    def _paths(self, url: str) -> tuple[Path, Path, S]:
         parts = urlparse(url).path.strip("/").split("/")
 
         if (
@@ -65,7 +56,7 @@ class TardisBookSnapshot:
         depth = int(kind.rsplit("_", 1)[1])
         date = f"{year}-{month}-{day}"
 
-        schema = BookSnapshotSchema(
+        schema = S(
             depth=depth,
             exchange=exchange,
             symbol=symbol,
@@ -119,7 +110,7 @@ class TardisBookSnapshot:
         return path
 
     @staticmethod
-    def _rename_map(schema: BookSnapshotSchema) -> dict[str, str]:
+    def _rename_map(schema: S) -> dict[str, str]:
         names = {
             "timestamp": schema.timestamp_us,
             "local_timestamp": schema.local_timestamp_us,
@@ -131,7 +122,7 @@ class TardisBookSnapshot:
         return names
 
     @classmethod
-    def _frame(cls, csv: Path, schema: BookSnapshotSchema) -> pl.LazyFrame:
+    def _frame(cls, csv: Path, schema: S) -> pl.LazyFrame:
         names = cls._rename_map(schema)
         types = {
             original: pl.Int64
@@ -251,9 +242,7 @@ class TardisBookSnapshot:
         ).to_numpy()
 
     @classmethod
-    def _arrays(
-        cls, frame: pl.DataFrame, schema: BookSnapshotSchema
-    ) -> dict[str, np.ndarray]:
+    def _arrays(cls, frame: pl.DataFrame, schema: S) -> dict[str, np.ndarray]:
         raw = cls._floats(frame, schema.raw_feature_columns)
         engineered = cls._floats(frame, schema.engineered_feature_columns)
         mid = cls._floats(frame, [schema.mid_price])[:, 0]
@@ -308,7 +297,7 @@ class TardisBookSnapshot:
         }
 
     @staticmethod
-    def _write_attributes(h5: h5py.File, schema: BookSnapshotSchema):
+    def _write_attributes(h5: h5py.File, schema: S):
         attrs = h5.attrs
         for name, value in schema.attributes.items():
             if isinstance(value, list):
@@ -319,7 +308,7 @@ class TardisBookSnapshot:
                 attrs[name] = value
 
     @staticmethod
-    def _check_output(path: Path, schema: BookSnapshotSchema):
+    def _check_output(path: Path, schema: S):
         with h5py.File(path, "r") as h5:
             attrs = h5.attrs
             for name, expected in schema.attributes.items():
@@ -379,7 +368,7 @@ class TardisBookSnapshot:
         self,
         source: Path,
         output: Path,
-        schema: BookSnapshotSchema,
+        schema: S,
         batch_size: int = 65_536,
     ) -> Path:
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -447,45 +436,3 @@ class TardisBookSnapshot:
                 self.process(self.download(url, raw), processed, schema)
             outputs.append(processed)
         return outputs
-
-
-if __name__ == "__main__":
-    DEFAULT_URLS = [
-        f"https://datasets.tardis.dev/v1/binance-futures/book_snapshot_5/{year}/{month:02d}/01/BTCUSDT.csv.gz"
-        for year, month in [
-            (2020, 9),
-            (2020, 10),
-            (2020, 11),
-            (2020, 12),
-            (2021, 1),
-            (2021, 2),
-        ]
-    ]
-
-    parser = argparse.ArgumentParser(
-        description="Download and prepare Tardis order book snapshots"
-    )
-    parser.add_argument("urls", nargs="*", default=DEFAULT_URLS)
-    parser.add_argument("--horizons", type=int, nargs="+", default=[10, 50, 100])
-    parser.add_argument("--tick-size", type=float, default=None)
-    parser.add_argument(
-        "--depth-levels", type=int, nargs="+", default=[1, 3, 5, 10, 25]
-    )
-    parser.add_argument("--return-lags", type=int, nargs="+", default=[1, 10, 50])
-    parser.add_argument("--ofi-windows", type=int, nargs="+", default=[10, 50, 100])
-    parser.add_argument("--volatility-window", type=int, default=50)
-    parser.add_argument("--event-rate-window", type=int, default=50)
-    parser.add_argument("--overwrite", action="store_true")
-    args = parser.parse_args()
-
-    dataset = TardisBookSnapshot(
-        horizons=tuple(args.horizons),
-        tick_size=args.tick_size,
-        depth_levels=tuple(args.depth_levels),
-        return_lags=tuple(args.return_lags),
-        ofi_windows=tuple(args.ofi_windows),
-        volatility_window=args.volatility_window,
-        event_rate_window=args.event_rate_window,
-    )
-    for path in dataset.prepare(args.urls, overwrite=args.overwrite):
-        print(path)

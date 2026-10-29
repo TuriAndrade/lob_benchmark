@@ -9,7 +9,7 @@ from typing import Literal
 
 import numpy as np
 
-from models import TabularModel
+from ..models import TabularModel
 from .metrics import StreamingMetrics, compute_metrics
 
 

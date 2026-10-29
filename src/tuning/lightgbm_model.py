@@ -1,6 +1,6 @@
 """LightGBM tuning configuration."""
 
-from models import LightGBMModel
+from ..models import LightGBMModel
 
 from .common import arguments, grid_search, tuning_kwargs
 from .tabular_tuning import TabularTuning

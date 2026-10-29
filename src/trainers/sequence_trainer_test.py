@@ -3,22 +3,15 @@
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
 
-SRC = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(SRC))
+from ..data import SequenceDataset, _write_h5_fixture
+from ..models import TCNModel
 
-from data import SequenceDataset, _write_h5_fixture
-from models import TCNModel
-
-try:
-    from .sequence_trainer import SequenceTrainer, SequenceTrainerConfig
-except ImportError:
-    from sequence_trainer import SequenceTrainer, SequenceTrainerConfig
+from .sequence_trainer import SequenceTrainer, SequenceTrainerConfig
 
 
 @pytest.fixture(scope="module")
@@ -108,11 +101,7 @@ def test_distributed_fsdp(data):
 
 
 def run_distributed(data, mode, shuffle, drop_last):
-    worker = Path(__file__).with_name("distributed_worker_test.py")
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(
-        filter(None, (str(SRC), env.get("PYTHONPATH", "")))
-    )
     env.update(OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
 
     command = [
@@ -121,7 +110,8 @@ def run_distributed(data, mode, shuffle, drop_last):
         "torch.distributed.run",
         "--standalone",
         "--nproc-per-node=2",
-        str(worker),
+        "--module",
+        "src.trainers.distributed_worker_test",
         str(data),
         mode,
         str(int(shuffle)),

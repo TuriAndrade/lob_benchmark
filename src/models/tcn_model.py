@@ -71,7 +71,7 @@ class TCNModel(SequenceModel):
     def forward(self, x):
         x = self.network(x.transpose(1, 2))
         output = self.head(x[:, :, -1])
-        return output.squeeze(-1) if self.task == "regression" else output
+        return output.squeeze(-1).clone() if self.task == "regression" else output
 
     def fsdp_modules(self):
         """Shard complete residual temporal blocks, not individual convolutions."""

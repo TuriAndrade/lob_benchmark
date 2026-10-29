@@ -8,13 +8,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from data import TabularDataset, _write_h5_fixture
-from models import LightGBMModel, LinearModel
+from ..data import TabularDataset, _write_h5_fixture
+from ..models import LightGBMModel, LinearModel
 
-try:
-    from .tabular_trainer import TabularTrainer, TabularTrainerConfig
-except ImportError:
-    from tabular_trainer import TabularTrainer, TabularTrainerConfig
+from .tabular_trainer import TabularTrainer, TabularTrainerConfig
 
 
 @pytest.fixture(scope="module")

@@ -1,6 +1,6 @@
 """Linear model tuning configuration."""
 
-from models import LinearModel
+from ..models import LinearModel
 
 from .common import arguments, grid_search, tuning_kwargs
 from .tabular_tuning import TabularTuning

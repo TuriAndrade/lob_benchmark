@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
 
-from data import TabularDataset
-from trainers import TabularTrainer, TabularTrainerConfig
+from ..data import TabularDataset
+from ..trainers import TabularTrainer, TabularTrainerConfig
 
 from .common import paths, prepare_dir, save_results, set_seed, summary
 

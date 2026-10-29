@@ -8,18 +8,15 @@ import os
 from pathlib import Path
 from time import perf_counter
 
+import shutil
 import h5py
 import numpy as np
 import pytest
 import torch
 from torch.utils.data import DataLoader
 
-try:
-    from .datasets import TabularDataset, SequenceDataset
-    from .schema import BookSnapshotSchema
-except ImportError:  # Also supports running the test file directly.
-    from datasets import TabularDataset, SequenceDataset
-    from schema import BookSnapshotSchema
+from .datasets import TabularDataset, SequenceDataset
+from .schema import LOBSnapshotSchema
 
 
 HORIZON = 50
@@ -29,7 +26,7 @@ READ_SIZE = 31  # Deliberately smaller than the window plus several batches.
 
 def _write_h5_fixture(path, n, date="2020-09-01", gaps=True):
     """Small deterministic fixture with the exact converter layout."""
-    schema = BookSnapshotSchema(
+    schema = LOBSnapshotSchema(
         depth=5,
         exchange="binance-futures",
         symbol="BTCUSDT",
@@ -429,9 +426,9 @@ def test_window_does_not_cross_files(two_files):
 def test_future_feature_leakage(sample, tmp_path):
     cutoff = 380
     altered = tmp_path / "future.h5"
-    with h5py.File(sample) as source, h5py.File(altered, "w") as target:
-        for name in source:
-            source.copy(name, target)
+    shutil.copyfile(sample, altered)
+
+    with h5py.File(altered, "r+") as target:
         target["raw_features"][cutoff:] = 123.0
         target["engineered_features"][cutoff:] = 123.0
 

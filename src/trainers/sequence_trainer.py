@@ -14,7 +14,14 @@ from torch import nn
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from models import SequenceModel
+import torch.distributed.checkpoint as dcp
+from torch.distributed.checkpoint.state_dict import (
+    get_model_state_dict,
+    set_model_state_dict,
+    StateDictOptions,
+)
+
+from ..models import SequenceModel
 from .distributed import prepare_model, setup_distributed
 from .metrics import StreamingMetrics
 from .optimizer import AdamW
@@ -247,9 +254,6 @@ class SequenceTrainer:
                 for k, v in self.raw_model.state_dict().items()
             }
 
-        import torch.distributed.checkpoint as dcp
-        from torch.distributed.checkpoint.state_dict import get_model_state_dict
-
         destination = root / str(epoch)
         dcp.save(
             {"model": get_model_state_dict(self.model)},
@@ -266,12 +270,6 @@ class SequenceTrainer:
         if self.context.mode != "fsdp":
             self.raw_model.load_state_dict(best)
             return
-
-        import torch.distributed.checkpoint as dcp
-        from torch.distributed.checkpoint.state_dict import (
-            get_model_state_dict,
-            set_model_state_dict,
-        )
 
         state = {"model": get_model_state_dict(self.model)}
         dcp.load(state, checkpoint_id=best)
@@ -386,11 +384,6 @@ class SequenceTrainer:
     def save(self, path):
         """Export a standalone model checkpoint; all ranks must call for FSDP2."""
         if self.context.mode == "fsdp":
-            from torch.distributed.checkpoint.state_dict import (
-                StateDictOptions,
-                get_model_state_dict,
-            )
-
             state = get_model_state_dict(
                 self.model,
                 options=StateDictOptions(
