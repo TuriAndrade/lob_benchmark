@@ -1,210 +1,244 @@
 # LOB Benchmark
 
-This repository contains tools for testing short-horizon price prediction models on limit order book (LOB) data. It covers downloading and processing market data, preparing tabular and sequential inputs, tuning models, and evaluating them on held-out dates. It also supports efficient preprocessing and batch-wise data loading, allowing large datasets to be processed without loading them entirely into memory.
+An extensible research framework for short-horizon limit order book (LOB) prediction, with a focus on **large-scale data processing, memory-efficient HDF5 datasets, and distributed deep learning**.
 
-The current setup uses BTCUSDT snapshots from Binance Futures, obtained through [Tardis](https://tardis.dev/). It supports regression of future mid-price returns and classification of price movements into down, neutral, and up. The models implemented so far are linear models, LightGBM, and a temporal convolutional network (TCN).
+The benchmark covers market-data preparation, causal feature engineering, regression and classification targets, hyperparameter tuning, and evaluation on chronologically held-out data. It currently supports historical **Bybit** order book data and implements linear models, LightGBM, and a temporal convolutional network (TCN). Its dataset and model interfaces are designed to accommodate other data providers and prediction architectures.
 
-The results reported below are from a small smoke test of the pipeline. They are not intended as a full comparison of the models.
-
-## How it works
+## Overview
 
 ```text
-Tardis snapshots
-    -> download and validate files
-    -> compute features and targets with Polars
-    -> save processed data as Parquet
-    -> load tabular features or historical LOB windows
-    -> tune models on training/validation data
-    -> evaluate on a held-out test date
+Bybit historical order book updates (snapshots + deltas)
+    -> reconstruct order books and compute causal features
+    -> write chunked HDF5 files and future-return targets
+    -> stream tabular observations or historical LOB windows
+    -> tune models on chronological training/validation splits
+    -> evaluate on held-out test dates
 ```
 
-The code is split into a few modules:
+Key capabilities:
 
-| Path | Contents |
+- **Scalable preprocessing:** incrementally reconstruct order books from daily Bybit archives and write chunked HDF5 files without retaining full histories in RAM.
+- **Efficient data loading:** select raw and engineered features, stream HDF5 batches, or generate sequence windows on demand without materializing all overlapping windows.
+- **Distributed training:** train PyTorch sequence models on a single device or with DistributedDataParallel (DDP) and Fully Sharded Data Parallel (FSDP2), including rank-aware data partitioning and distributed evaluation.
+- **Multiple forecasting tasks:** regress future mid-price returns or classify price movements using a configurable threshold in basis points.
+- **Extensible experiments:** shared dataset, training, tuning, and evaluation interfaces for classical ML and neural sequence models.
+
+## Data pipeline
+
+### Bybit processing
+
+`scripts/setup_bybit_dataset.py` downloads or accepts local daily Bybit order book archives. The processor reconstructs the book from snapshot and delta messages, tracks uninterrupted segments, and computes features in batches. A separate HDF5 file is created for each continuous segment so historical windows do not cross reconstruction resets.
+
+The processed files are stored in `DATA_DIR/bybit/processed/`. Each `.h5` file contains:
+
+| Dataset or attribute | Description |
 | --- | --- |
-| `src/data/src_tardis.py` | Data download, preprocessing, target generation, and Parquet export |
-| `src/data/schema.py`, `src/data/features.py` | Column definitions and feature calculations |
-| `src/data/datasets.py` | Tabular and sequence datasets, sampling, and normalization |
-| `src/data/datasets_test.py` | Dataset and alignment tests |
-| `src/models/` | Model implementations and base interfaces |
-| `src/trainers/` | Training and evaluation code |
-| `src/tuning/`, `src/tune.py` | Hyperparameter search and experiment scripts |
+| `raw_features` | Bid/ask prices and sizes at the selected book depth |
+| `engineered_features` | Causal market microstructure features |
+| `targets` | Future mid-price returns for the configured event horizons |
+| `valid_book` | Validity flags for reconstructed order book states |
+| `metadata/` | Timestamps, update identifiers, mid-prices, and target-end information |
+| HDF5 attributes | Feature/target names, horizons, depth, symbol, date, and source information |
 
-## Data
+Engineered features include spread and microprice deviation, bid/ask notional depth, depth imbalance, order flow imbalance (OFI), lagged returns, rolling volatility, interarrival time, and order book update rates. The processor supports configurable book depth, aggregation levels, lookback windows, and prediction horizons.
 
-### Preprocessing
+The current data source is Bybit BTCUSDT linear contracts, but **other data providers can be integrated by exporting the same HDF5 schema**. The dataset and training code are independent of the original provider.
 
-The data processor downloads Tardis book_snapshot_5 or book_snapshot_25 files, validates the gzip archives, and computes features and prediction targets using Polars. Preprocessing uses lazy execution and streaming to process large files without loading them entirely into memory, storing the results in compressed Parquet format. The dataset interfaces support batch-wise reading, and sequence windows are generated incrementally, allowing deep learning models to train on datasets larger than available RAM. The processed data includes raw book levels, timestamps, event indices, engineered features, and targets for the selected prediction horizons.
+### Dataset interfaces
 
-The available features include bid/ask spread, depth and depth imbalance at several levels, top-of-book order flow imbalance (OFI) and rolling OFI, microprice deviation, lagged returns, volatility, interarrival time, and event rate.
+`src/data/datasets.py` provides two interfaces over the processed HDF5 files:
 
-There are two dataset classes:
+| Dataset | Use case | Loading behavior |
+| --- | --- | --- |
+| `TabularDataset` | Linear models and LightGBM | Streams selected feature batches or loads selected observations into arrays |
+| `SequenceDataset` | TCN and other neural sequence models | Reads historical windows on demand and yields prebatched tensors; supports distributed ranks and data-loader workers |
 
-- `TabularDataset` loads engineered features for models such as linear regression and LightGBM. It can read Parquet data in batches and optionally sample a fixed number of observations. The tabular trainer currently loads the selected training arrays into memory for fitting.
-- `SequenceDataset` produces windows of past LOB states, with optional engineered features. It reads Parquet data in batches and yields sequence batches without keeping all overlapping windows in memory. Windows do not cross file boundaries.
+The tabular trainer supports `--data-mode load` and `--data-mode stream`. The latter stages streamed observations in disk-backed arrays before fitting, reducing the need to materialize the input dataset as one in-memory array. Individual estimators may still allocate additional memory during fitting.
 
-### Prediction targets
+For sequence models, the dataset partitions batches across distributed processes, supports deterministic sampling, and preserves sequence boundaries. Normalization statistics are computed from training data and reused for validation and testing.
 
-The midpoint is the average of the best bid and best ask prices. For an event `t` and a horizon `H`, the return target is:
+### Prediction tasks
+
+The mid-price and return target at an event horizon `H` are defined as:
 
 ```text
 mid(t) = (best_bid(t) + best_ask(t)) / 2
 return_bps(t, H) = 10,000 * (mid(t + H) / mid(t) - 1)
 ```
 
-In regression, the model predicts this return directly. In classification, a threshold in basis points determines the label:
+- **Regression:** predict `return_bps(t, H)` directly.
+- **Classification:** classify the same return as **down (0)** if it is below `-threshold`, **neutral (1)** if it falls within `[-threshold, +threshold]`, or **up (2)** if it exceeds `+threshold`.
 
-| Label | Condition |
+Prediction horizons are measured in **order book events**, not elapsed seconds. The default processed targets use 10, 50, and 100 events; a specific target is selected at training time with `--target-name` (for example, `target_return_50_bps`).
+
+### Chronological evaluation
+
+The tuning scripts group compatible HDF5 parts by date and split dates chronologically. By default, they use **8 training days, 1 validation day, and 1 test day**, configurable through `--n-train-days`, `--n-val-days`, and `--n-test-days`. Hyperparameters are selected using validation loss, and the chosen model is then evaluated on the held-out test split.
+
+Regression evaluation includes MSE, MAE, and R²; classification includes log loss, accuracy, balanced accuracy, and macro-F1. Experiments save trial configurations, evaluation metadata, and the selected model checkpoint.
+
+## Models and training
+
+| Model | Input | Tasks | Training |
+| --- | --- | --- | --- |
+| Linear (Ridge / logistic regression) | Engineered tabular features | Regression, classification | Single process |
+| LightGBM | Engineered tabular features | Regression, classification | Single process |
+| TCN | Historical LOB windows, optionally with engineered features | Regression, classification | Single device, DDP, FSDP2 |
+
+The TCN is a causal, residual temporal convolutional network. Its tuning workflow first selects the input representation and window length, then searches architecture and optimization settings. The sequence trainer supports gradient accumulation, early stopping, gradient clipping, learning-rate scheduling, checkpointing, and optional BF16 precision on supported CUDA hardware.
+
+To add a model, implement `TabularModel` or extend `SequenceModel` in `src/models/`, add a tuning entry point in `src/tuning/`, and register it in `src/tuning/__init__.py`. The existing HDF5 datasets, trainers, and evaluation utilities can then be reused.
+
+## Repository structure
+
+| Path | Purpose |
 | --- | --- |
-| Down (0) | Return is below `-threshold_bps` |
-| Neutral (1) | Return is between `-threshold_bps` and `+threshold_bps`, inclusive |
-| Up (2) | Return is above `+threshold_bps` |
-
-The default horizons are 10, 50, and 100 **events**, not fixed amounts of time.
-
-### Temporal split and leakage checks
-
-The tuning scripts sort the processed files by date and use the first four dates for training, the fifth for validation, and the sixth for testing. With the default download URLs, these are the first days of September 2020 through February 2021. They are six separate dates, not six consecutive trading days.
-
-Inputs contain current and past observations; future mid-prices are used to build targets. Sequence windows are aligned to the event being predicted. Each sample also retains the observation index and timestamp, along with the event and timestamp at the end of its prediction horizon. Normalization statistics are calculated from the training files and reused for validation and testing.
-
-Invalid book states and nonfinite inputs are filtered out. The dataset tests check target alignment, sequence windows, deterministic sampling, normalization, and whether changing later stored features affects earlier inputs. These checks cover specific sources of leakage; they do not rule out every possible issue in market-data preprocessing.
-
-## Models and evaluation
-
-| Model | Inputs | Tasks |
-| --- | --- | --- |
-| Ridge / logistic regression | Engineered features | Regression and classification |
-| LightGBM | Engineered features | Regression and classification |
-| TCN | Historical LOB windows, optionally with engineered features | Regression and classification |
-
-Each model has a tuning script with a parameter grid. Models are selected using validation loss and then evaluated once on the held-out test split. LightGBM and the TCN support early stopping. Runs save the tested configurations, selected hyperparameters, evaluation metrics, normalization information, and fitted model.
-
-For regression, the reported metrics are MSE, MAE, and R². Classification uses log loss, accuracy, balanced accuracy, and macro-F1.
-
-## Initial experiments
-
-I ran a small set of experiments with linear models and LightGBM to check that the complete workflow was working, from loading the data to saving evaluation results. Each run used **20,000 training samples, 1,000 validation samples, and 1,000 test samples**, sampled from the chronological partitions described above. The TCN is implemented but was not included in these runs.
-
-The tables report **test-set** metrics for the configurations selected on validation data. Values are rounded to four decimal places.
-
-### Regression
-
-The target is future mid-price return in basis points. MAE is in basis points and MSE is in squared basis points.
-
-| Horizon (events) | Model | MSE | MAE (bps) | R² |
-| ---: | --- | ---: | ---: | ---: |
-| 10 | Linear | 0.6061 | 0.4324 | 0.0995 |
-| 10 | LightGBM | 0.6103 | 0.4385 | 0.0932 |
-| 50 | Linear | 4.3877 | 1.4150 | 0.0381 |
-| 50 | LightGBM | 4.3498 | 1.4086 | 0.0464 |
-| 100 | Linear | 9.1636 | 2.1118 | 0.0191 |
-| 100 | LightGBM | 9.0955 | 2.1059 | 0.0264 |
-
-Both models obtained positive but low R² in this test. Linear regression was slightly better at 10 events, while LightGBM was slightly better at 50 and 100 events. The differences are small and were measured on one test date.
-
-### Classification
-
-Three-class classification was tested with movement thresholds of 0, 0.25, and 0.50 bps.
-
-| Threshold (bps) | Horizon | Model | Log loss | Accuracy | Balanced accuracy | Macro-F1 |
-| ---: | ---: | --- | ---: | ---: | ---: | ---: |
-| 0.00 | 10 | LightGBM | 0.8502 | 0.5911 | 0.5793 | 0.5797 |
-| 0.00 | 10 | Linear | 0.8898 | 0.5534 | 0.5188 | 0.4985 |
-| 0.00 | 50 | LightGBM | 0.8707 | 0.5706 | 0.4363 | 0.4307 |
-| 0.00 | 50 | Linear | 0.9048 | 0.5117 | 0.4927 | 0.4714 |
-| 0.00 | 100 | LightGBM | 0.8086 | 0.5619 | 0.3923 | 0.3830 |
-| 0.00 | 100 | Linear | 0.8316 | 0.5246 | 0.3913 | 0.3994 |
-| 0.25 | 10 | LightGBM | 0.8484 | 0.6183 | 0.4008 | 0.3830 |
-| 0.25 | 10 | Linear | 0.8960 | 0.6064 | 0.3725 | 0.3317 |
-| 0.25 | 50 | LightGBM | 1.0487 | 0.4614 | 0.4546 | 0.4484 |
-| 0.25 | 50 | Linear | 1.0692 | 0.3915 | 0.4295 | 0.3915 |
-| 0.25 | 100 | LightGBM | 0.9886 | 0.5019 | 0.3898 | 0.3651 |
-| 0.25 | 100 | Linear | 1.0015 | 0.4563 | 0.4044 | 0.4042 |
-| 0.50 | 10 | LightGBM | 0.7292 | 0.7107 | 0.3458 | 0.3037 |
-| 0.50 | 10 | Linear | 0.7802 | 0.7083 | 0.3476 | 0.3095 |
-| 0.50 | 50 | LightGBM | 1.1210 | 0.3150 | 0.3351 | 0.1631 |
-| 0.50 | 50 | Linear | 1.1262 | 0.3622 | 0.3782 | 0.2867 |
-| 0.50 | 100 | LightGBM | 1.0764 | 0.4262 | 0.4139 | 0.4116 |
-| 0.50 | 100 | Linear | 1.0920 | 0.3683 | 0.3983 | 0.3677 |
-
-Results vary considerably with horizon and threshold. In particular, accuracy can be high while macro-F1 is low when one class is much more common than the others. These runs are useful for checking the evaluation code, but more data and stronger baselines are needed before comparing models seriously.
+| `src/data/bybit/` | Bybit order book reconstruction, feature engineering, and HDF5 export |
+| `src/data/datasets.py` | Source-independent tabular and sequence HDF5 datasets |
+| `src/models/` | Model implementations and common interfaces |
+| `src/trainers/` | Tabular/sequence training, metrics, optimization, and DDP/FSDP support |
+| `src/tuning/` | Model-specific hyperparameter searches and chronological experiment workflow |
+| `scripts/setup_bybit_dataset.py` | CLI for preparing Bybit datasets |
+| `scripts/tune_model.py` | CLI for tuning and evaluating registered models |
+| `src/**/*_test.py` | Dataset, trainer, and distributed integration tests |
 
 ## Running the code
 
-### Setup
+### 1. Installation
+
+From the repository root:
 
 ```bash
 git clone https://github.com/TuriAndrade/lob_benchmark.git
 cd lob_benchmark
 
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-pip install tqdm
+
+cp example.env .env
 ```
 
-Copy `example.env` to `.env` and set the data and output paths:
+Configure `.env`:
 
 ```dotenv
 DATA_DIR=/path/to/data
 RESULTS_DIR=/path/to/results
 ```
 
-### Process snapshots
+### 2. Prepare Bybit data
+
+Process the previous ten days of Bybit BTCUSDT order book archives using the default settings:
 
 ```bash
-python src/data/src_tardis.py
+python -m scripts.setup_bybit_dataset
 ```
 
-By default, this downloads six BTCUSDT depth-5 snapshot dates and prepares targets for horizons 10, 50, and 100. You can also pass different Tardis snapshot URLs and horizons. Processed Parquet files are saved under `DATA_DIR/tardis_book_snapshot/processed/`.
-
-### Tune and evaluate
-
-Linear regression:
+Or customize the features and horizons:
 
 ```bash
-python src/tune.py \
-  --model linear_model \
+python -m scripts.setup_bybit_dataset \
+  --depth 10 \
+  --depth-levels 1 5 10 \
+  --return-lags 1 10 50 \
+  --windows 10 50 100 \
+  --horizons 10 50 100 \
+  --batch-size 8192
+```
+
+The script also accepts Bybit archive URLs or local daily `.data.zip` files as positional arguments. Use `--overwrite` to regenerate processed files. The HDF5 files will be written to `/path/to/data/bybit/processed/` when `DATA_DIR=/path/to/data`.
+
+### 3. Tune and evaluate models
+
+All examples use the directory containing the processed `.h5` files. Sample limits are optional; omit them to use all eligible observations.
+
+**Linear regression (disk-backed tabular data):**
+
+```bash
+python -m scripts.tune_model \
+  --model linear \
+  --data-path /path/to/data/bybit/processed \
   --task regression \
-  --horizon 50 \
-  --train-samples 20000 \
-  --val-samples 1000 \
-  --test-samples 1000
+  --target-name target_return_50_bps \
+  --data-mode stream \
+  --n-train-samples 20000 \
+  --n-val-samples 1000 \
+  --n-test-samples 1000
 ```
 
-LightGBM classification:
+**LightGBM classification (0.25 bps threshold):**
 
 ```bash
-python src/tune.py \
-  --model lightgbm_model \
+python -m scripts.tune_model \
+  --model lightgbm \
+  --data-path /path/to/data/bybit/processed \
   --task classification \
-  --horizon 50 \
+  --target-name target_return_50_bps \
   --threshold 0.25 \
-  --train-samples 20000 \
-  --val-samples 1000 \
-  --test-samples 1000
+  --data-mode stream \
+  --n-train-samples 20000 \
+  --n-val-samples 1000 \
+  --n-test-samples 1000
 ```
 
-The other registered model is `tcn_model`, which currently requires CUDA. The scripts save `trials.json`, `results.json`, and the fitted model (`model.joblib` or `model.pt`) under `RESULTS_DIR`. A run stops if its output directory already exists, so it must be moved or removed before running the same configuration again.
-
-### Tests
+**TCN with DDP on two GPUs:**
 
 ```bash
-pytest -q src/data/datasets_test.py
+torchrun --standalone --nproc-per-node=2 -m scripts.tune_model \
+  --model tcn \
+  --data-path /path/to/data/bybit/processed \
+  --task regression \
+  --target-name target_return_50_bps \
+  --training-mode ddp \
+  --batch-size 256 \
+  --precision fp32 \
+  --n-train-samples 20000 \
+  --n-val-samples 1000 \
+  --n-test-samples 1000
 ```
 
-The tests use a sample from an existing processed Parquet file, so the data must be prepared first.
+**TCN with FSDP2 on two GPUs:**
 
-## Adding a model
+```bash
+torchrun --standalone --nproc-per-node=2 -m scripts.tune_model \
+  --model tcn \
+  --data-path /path/to/data/bybit/processed \
+  --task regression \
+  --target-name target_return_50_bps \
+  --training-mode fsdp \
+  --batch-size 256 \
+  --precision fp32 \
+  --n-train-samples 20000 \
+  --n-val-samples 1000 \
+  --n-test-samples 1000
+```
 
-Tabular models implement `TabularModel` and sequence models extend `SequenceModel`. To add a model, implement the corresponding interface, create a tuning entry point under `src/tuning/`, and register it in `src/tuning/__init__.py`. The existing dataset and evaluation code can then be reused.
+Sequence training also supports `--training-mode single` (the default) and `--precision bf16` on CUDA GPUs with BF16 support. A run writes `trials.json`, `results.json`, and either `model.joblib` or `model.pt` under `RESULTS_DIR/<model>/<experiment>/`; `--save-dir` changes the destination and `--override` allows reusing an existing output directory.
 
-## Roadmap
+### 4. Run tests
 
-- [ ] **Models:** Implement DeepLOB, MLPLOB, TLOB, and other LOB models, with more extensive hyperparameter tuning and baseline comparisons.
-- [ ] **Datasets:** Run experiments on more dates and additional instruments, and evaluate how results change across market conditions.
-- [ ] **Efficiency:** Benchmark training time, inference latency, throughput, memory use, and model size.
-- [ ] **Trading strategies:** Implement and evaluate strategies based on model predictions, accounting for transaction costs and execution constraints.
+Run the dataset, tabular trainer, single-device, and distributed DDP tests:
 
-This is a research benchmark, not a live trading system. Mid-price prediction metrics do not account for whether trades can be executed profitably after spread, fees, slippage, and latency.
+```bash
+python -m pytest -v -s
+```
+
+Enable the optional CPU FSDP integration test:
+
+```bash
+LOB_TEST_FSDP_CPU=1 python -m pytest -v -s
+```
+
+The tests use generated HDF5 fixtures. To additionally run the optional dataset-throughput test against a processed market-data file:
+
+```bash
+LOB_BENCHMARK_PATH=/path/to/data/bybit/processed/example.h5 \
+  python -m pytest -v -s src/data/datasets_test.py
+```
+
+Replace `example.h5` with an actual processed file name.
+
+## TODO
+
+- [ ] **LOB architectures:** Implement and tune TLOB and other state-of-the-art methods for LOB prediction.
+- [ ] **Trading policies:** Implement and evaluate trading policies driven by model predictions, accounting for fees, spread, slippage, latency, and execution constraints.
