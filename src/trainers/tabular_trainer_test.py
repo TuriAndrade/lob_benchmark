@@ -1,14 +1,11 @@
 """Integration tests for the tabular trainer."""
 
-import sys
-from pathlib import Path
-
+import h5py
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from ..data import TabularDataset, _write_h5_fixture
+from ..data import TabularDataset
+from ..data.datasets_test import _write_h5_fixture, TARGET
 from ..models import LightGBMModel, LinearModel
 
 from .tabular_trainer import TabularTrainer, TabularTrainerConfig
@@ -17,10 +14,28 @@ from .tabular_trainer import TabularTrainer, TabularTrainerConfig
 @pytest.fixture(scope="module")
 def data(tmp_path_factory):
     root = tmp_path_factory.mktemp("tabular_trainer")
-    return (
+    paths = (
         _write_h5_fixture(root / "train.h5", 700, gaps=False),
         _write_h5_fixture(root / "val.h5", 350, gaps=False),
     )
+
+    for path in paths:
+        with h5py.File(path, "r+") as h5:
+            names = [
+                name.decode() if isinstance(name, bytes) else str(name)
+                for name in h5.attrs["target_names"]
+            ]
+            index = names.index(TARGET)
+            targets = h5["targets"]
+            values = targets[:, index]
+            valid = np.isfinite(values)
+            values[valid] = np.resize(
+                np.array([-4.0, 0.0, 4.0], dtype=np.float32),
+                valid.sum(),
+            )
+            targets[:, index] = values
+
+    return paths
 
 
 @pytest.mark.parametrize("model_cls", [LinearModel, LightGBMModel])

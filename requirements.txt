@@ -1,7 +1,5 @@
-polars
 python-dotenv
 numpy
-pyarrow
 torch
 scikit-learn
 lightgbm
@@ -9,3 +7,5 @@ joblib
 pytest
 h5py
 tqdm
+orjson
+sortedcontainers

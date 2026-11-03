@@ -12,7 +12,7 @@ class StreamingMetrics:
         self.stats = torch.zeros(15, dtype=torch.float64, device=device)
 
     @torch.no_grad()
-    def update(self, y, predictions):
+    def update(self, y, predictions, *, logits=False):
         y = torch.as_tensor(y, device=self.stats.device)
         predictions = torch.as_tensor(predictions, device=self.stats.device)
         if not y.numel():
@@ -33,11 +33,20 @@ class StreamingMetrics:
         else:
             if predictions.shape != (n, 3):
                 raise ValueError("Classification predictions must have shape (N, 3)")
+
             truth = y.long().reshape(-1)
-            probs = predictions.double().clamp(min=1e-15, max=1.0)
-            probs = probs / probs.sum(dim=1, keepdim=True)
-            self.stats[5] -= probs.gather(1, truth[:, None]).log().sum()
-            predicted = probs.argmax(dim=1)
+
+            if logits:
+                self.stats[5] += torch.nn.functional.cross_entropy(
+                    predictions, truth, reduction="sum"
+                ).double()
+                predicted = predictions.argmax(dim=1)
+            else:
+                probs = predictions.double().clamp(min=1e-15, max=1.0)
+                probs = probs / probs.sum(dim=1, keepdim=True)
+                self.stats[5] -= probs.gather(1, truth[:, None]).log().sum()
+                predicted = probs.argmax(dim=1)
+
             self.stats[6:] += torch.bincount(
                 truth * 3 + predicted, minlength=9
             ).double()

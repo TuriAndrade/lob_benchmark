@@ -45,7 +45,7 @@ def main():
     trainer = SequenceTrainer(
         SequenceTrainerConfig(
             model=TCNModel(
-                input_dim=20,
+                input_dim=len(train.feature_names),
                 channels=8,
                 num_layers=1,
                 dropout=0.0,
@@ -75,13 +75,13 @@ def main():
 
         # Evaluation must cover every selected sample exactly once.
         local_ids = [
-            int(event)
+            int(timestamp)
             for _, _, meta in trainer._loader(val)
-            for event in meta["event_id"]
+            for timestamp in meta["timestamp_us"]
         ]
         all_ids = [None] * world_size
         dist.all_gather_object(all_ids, local_ids)
-        combined = [event for ids in all_ids for event in ids]
+        combined = [timestamp for ids in all_ids for timestamp in ids]
         assert len(combined) == len(set(combined)) == val.total
 
         # DDP must leave identical parameters on every rank.

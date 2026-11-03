@@ -1,107 +1,127 @@
-"""Hyperparameter tuning for tabular models."""
+"""Validation-based grid search for tabular models."""
 
 from dataclasses import dataclass
+from itertools import product
 from math import isfinite
 from pathlib import Path
 
 from ..data import TabularDataset
 from ..trainers import TabularTrainer, TabularTrainerConfig
-
-from .common import paths, prepare_dir, save_results, set_seed, summary
+from .utils import data_options, paths, set_seed
 
 
 @dataclass
 class TabularTuning:
     model_cls: type
     model_params: list[dict]
+    trainer_params: list[dict]
+    data_params: list[dict]
     data_path: str | Path
-    save_dir: str | Path
     task: str = "regression"
-    depth: int = 5
-    horizon: int = 50
-    threshold_bps: float = 0.25
+    target_name: str = "target_return_50_bps"
+    threshold_bps: float = 0.0
     n_train_days: int = 4
     n_val_days: int = 1
-    n_test_days: int = 1
     n_train_samples: int | None = None
     n_val_samples: int | None = None
-    n_test_samples: int | None = None
-    normalize: bool = False
     seed: int = 42
     read_batch_size: int = 65_536
     data_mode: str = "load"
-    override: bool = False
 
     def run(self):
-        if not self.model_params:
-            raise ValueError("model_params must not be empty")
+        if not all((self.model_params, self.trainer_params, self.data_params)):
+            raise ValueError("All three parameter grids must be nonempty")
 
-        files = paths(
-            self.data_path,
-            self.depth,
-            self.horizon,
-            self.n_train_days,
-            self.n_val_days,
-            self.n_test_days,
-        )
-        prepare_dir(self.save_dir, self.override)
-        set_seed(self.seed)
+        if any("task" in params for params in self.model_params):
+            raise ValueError("model_params cannot override task")
 
-        options = dict(
-            horizon=self.horizon,
-            task=self.task,
-            threshold_bps=self.threshold_bps,
-            normalize=self.normalize,
-            seed=self.seed,
-            read_batch_size=self.read_batch_size,
-        )
-        train = TabularDataset(files[0], n_samples=self.n_train_samples, **options)
-        mean, std = train.get_stats()
-        val = TabularDataset(
-            files[1],
-            n_samples=self.n_val_samples,
-            mean=mean,
-            std=std,
-            **options,
-        )
+        if any({"model", "task"} & params.keys() for params in self.trainer_params):
+            raise ValueError("trainer_params cannot override model or task")
 
+        best_model = best_entry = None
+        best_loss = float("inf")
         trials = []
-        best = best_result = best_trainer = None
+        total = (
+            len(self.data_params) * len(self.model_params) * len(self.trainer_params)
+        )
+        trial_number = 0
 
-        for i, params in enumerate(self.model_params, 1):
-            print(f"Trial {i}/{len(self.model_params)}: {params}")
-            set_seed(self.seed)
+        for data_params in self.data_params:
+            source_depth, options = data_options(data_params, sequence=False)
+            train_paths, val_paths, _ = paths(
+                self.data_path,
+                self.n_train_days,
+                self.n_val_days,
+                n_test_days=0,
+                source_depth=source_depth,
+            )
 
-            trainer = TabularTrainer(
-                TabularTrainerConfig(
-                    model=self.model_cls(task=self.task, **params),
+            dataset_kwargs = dict(
+                target_name=self.target_name,
+                task=self.task,
+                threshold_bps=self.threshold_bps,
+                seed=self.seed,
+                read_batch_size=self.read_batch_size,
+                **options,
+            )
+
+            train = TabularDataset(
+                train_paths,
+                n_samples=self.n_train_samples,
+                **dataset_kwargs,
+            )
+            mean, std = train.get_stats()
+            val = TabularDataset(
+                val_paths,
+                n_samples=self.n_val_samples,
+                mean=mean,
+                std=std,
+                **dataset_kwargs,
+            )
+
+            for model_params, trainer_params in product(
+                self.model_params, self.trainer_params
+            ):
+                trial_number += 1
+                set_seed(self.seed)
+                print(
+                    f"Trial {trial_number}/{total}: "
+                    f"{model_params} / {trainer_params} / {data_params}"
+                )
+
+                model = self.model_cls(task=self.task, **model_params)
+                settings = dict(
+                    model=model,
                     task=self.task,
                     data_mode=self.data_mode,
                     verbose=False,
                 )
-            )
-            result = trainer.fit(train, val)
+                settings.update(trainer_params)
 
-            if not isfinite(result["val_loss"]):
-                raise ValueError(f"Nonfinite validation loss in trial {i}")
+                trainer = TabularTrainer(TabularTrainerConfig(**settings))
+                result = trainer.fit(train, val)
+                loss = float(result["val_loss"])
 
-            trials.append({"model_params": params, **result})
-            if best_result is None or result["val_loss"] < best_result["val_loss"]:
-                best, best_result, best_trainer = params, result, trainer
+                if not isfinite(loss):
+                    raise ValueError(
+                        f"Nonfinite validation loss in trial {trial_number}"
+                    )
 
-        test = TabularDataset(
-            files[2],
-            n_samples=self.n_test_samples,
-            mean=mean,
-            std=std,
-            **options,
-        )
-        evaluation = best_trainer.eval(test)
-        best_trainer.save(Path(self.save_dir) / "model.joblib")
+                entry = dict(
+                    model_params=dict(model_params),
+                    trainer_params=dict(trainer_params),
+                    data_params=dict(data_params),
+                )
+                trials.append(
+                    {
+                        **entry,
+                        **result,
+                        "train_files": list(map(str, train_paths)),
+                        "validation_files": list(map(str, val_paths)),
+                    }
+                )
 
-        results = summary(self, files, train, best_result, evaluation)
-        results.update(best_model_params=best, data_mode=self.data_mode)
-        save_results(self.save_dir, trials, results)
+                if loss < best_loss:
+                    best_model, best_entry, best_loss = model, entry, loss
 
-        print(f"Best: {best} | validation loss: {best_result['val_loss']:.6f}")
-        return results
+        return best_model, best_entry, trials

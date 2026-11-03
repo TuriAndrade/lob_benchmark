@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 import torch
 
-from ..data import SequenceDataset, _write_h5_fixture
+from ..data import SequenceDataset
+from ..data.datasets_test import _write_h5_fixture
 from ..models import TCNModel
 
 from .sequence_trainer import SequenceTrainer, SequenceTrainerConfig
@@ -47,7 +48,7 @@ def test_single(data, task, shuffle, drop_last):
     )
 
     model = TCNModel(
-        input_dim=20,
+        input_dim=len(train.feature_names),
         task=task,
         channels=8,
         num_layers=1,
@@ -78,7 +79,7 @@ def test_single(data, task, shuffle, drop_last):
 
         loss_key = "mse" if task == "regression" else "log_loss"
         assert evaluation["metrics"][loss_key] == pytest.approx(
-            result["val_loss"], abs=1e-5
+            result["val_loss"], rel=1e-5, abs=1e-5
         )
     finally:
         trainer.close()

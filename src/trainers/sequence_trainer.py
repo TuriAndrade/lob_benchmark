@@ -369,10 +369,7 @@ class SequenceTrainer:
             with self._autocast():
                 output = self.model(x).float()
 
-            if self.config.task == "classification":
-                output = output.softmax(dim=-1)
-
-            metrics.update(y, output)
+            metrics.update(y, output, logits=self.config.task == "classification")
 
         self.context.reduce(metrics.stats)
 
