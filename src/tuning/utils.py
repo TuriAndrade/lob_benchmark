@@ -1,4 +1,4 @@
-"""Shared utilities for LOB hyperparameter tuning."""
+"""Shared helpers for LOB model tuning."""
 
 import argparse
 import json
@@ -40,13 +40,13 @@ def arguments(sequence=False):
         action=argparse.BooleanOptionalAction,
         default=False,
     )
+    parser.add_argument(
+        "--verbose",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
 
     if sequence:
-        parser.add_argument(
-            "--training-mode",
-            choices=("single", "ddp", "fsdp"),
-            default="single",
-        )
         parser.add_argument(
             "--precision",
             choices=("fp32", "bf16"),
@@ -59,6 +59,19 @@ def arguments(sequence=False):
             choices=("load", "stream"),
             default="load",
         )
+
+    # Launcher arguments. Memory values are specified in GiB.
+    parser.add_argument("--gpu-ids", type=int, nargs="*", default=None)
+    parser.add_argument("--max-processes", type=int, default=4)
+    parser.add_argument("--min-processes", type=int, default=1)
+    parser.add_argument("--ram-offset", type=float, default=2)
+    parser.add_argument("--vram-offset", type=float, default=1)
+    parser.add_argument("--initial-ram", type=float, default=2)
+    parser.add_argument("--initial-vram", type=float, default=2)
+    parser.add_argument("--interval", type=float, default=10)
+    parser.add_argument("--memory-tolerance", type=float, default=0.0)
+    parser.add_argument("--retry-factor", type=float, default=1.3)
+    parser.add_argument("--max-retries", type=int, default=3)
 
     args = parser.parse_args()
 
@@ -83,7 +96,96 @@ def arguments(sequence=False):
     if not args.target_name or not np.isfinite(args.threshold) or args.threshold < 0:
         parser.error("Invalid target name or classification threshold")
 
+    for name in (
+        "ram_offset",
+        "vram_offset",
+        "initial_ram",
+        "initial_vram",
+    ):
+        value = getattr(args, name)
+        if not np.isfinite(value) or value < 0:
+            parser.error(f"{name} must be a nonnegative finite GiB value")
+
     return args
+
+
+def training_kwargs(args):
+    options = dict(
+        data_path=args.data_path,
+        task=args.task,
+        target_name=args.target_name,
+        threshold_bps=args.threshold,
+        n_train_days=args.n_train_days,
+        n_val_days=args.n_val_days,
+        n_train_samples=args.n_train_samples,
+        n_val_samples=args.n_val_samples,
+        seed=args.seed,
+        read_batch_size=args.read_batch_size,
+        verbose=args.verbose,
+    )
+
+    if hasattr(args, "batch_size"):
+        options.update(
+            batch_size=args.batch_size,
+            precision=args.precision,
+        )
+    else:
+        options["data_mode"] = args.data_mode
+
+    return options
+
+
+def launcher_kwargs(args):
+    gib = 1024**3
+
+    return dict(
+        gpu_ids=args.gpu_ids,
+        max_processes=args.max_processes,
+        min_processes=args.min_processes,
+        ram_offset=round(args.ram_offset * gib),
+        vram_offset=round(args.vram_offset * gib),
+        initial_ram=round(args.initial_ram * gib),
+        initial_vram=round(args.initial_vram * gib),
+        interval=args.interval,
+        memory_tolerance=args.memory_tolerance,
+        retry_factor=args.retry_factor,
+        max_retries=args.max_retries,
+        verbose=args.verbose,
+    )
+
+
+def trial_records(completed, failed):
+    """Convert launched training trials into persistent result records."""
+    records = []
+
+    for status, trials in (("completed", completed), ("failed", failed)):
+        for trial in trials:
+            training = trial.fn.__self__
+
+            record = dict(
+                status=status,
+                attempts=trial.attempts,
+                model_params=training.model_params,
+                trainer_params=training.trainer_params,
+                data_params=training.data_params,
+                estimated_ram=trial.estimated_ram,
+                estimated_vram=trial.estimated_vram,
+            )
+
+            if status == "completed":
+                record.update(
+                    {
+                        key: value
+                        for key, value in trial.result.items()
+                        if key != "model_path"
+                    }
+                )
+            else:
+                record["error"] = trial.error
+
+            records.append(record)
+
+    return records
 
 
 @lru_cache(maxsize=32)
@@ -176,7 +278,6 @@ def data_options(params, *, sequence):
         "engineered_feature_names": None if sequence else "all",
         "normalize": False,
     }
-
     options.update(
         {
             key: value
@@ -230,8 +331,8 @@ def output_dir(model, args):
 
     name += f"_seed{args.seed}"
 
-    if hasattr(args, "training_mode"):
-        name += f"_{args.training_mode}_{args.precision}_b{args.batch_size}"
+    if hasattr(args, "batch_size"):
+        name += f"_{args.precision}_b{args.batch_size}"
     else:
         name += f"_{args.data_mode}"
 
@@ -298,7 +399,6 @@ def summary(
         "n_train_samples": args.n_train_samples,
         "n_val_samples": args.n_val_samples,
         "n_test_samples": args.n_test_samples,
-        "training_mode": getattr(args, "training_mode", None),
         "precision": getattr(args, "precision", None),
         "batch_size": getattr(args, "batch_size", None),
         "data_mode": getattr(args, "data_mode", None),
