@@ -62,7 +62,7 @@ def arguments(sequence=False):
 
     # Launcher arguments. Memory values are specified in GiB.
     parser.add_argument("--gpu-ids", type=int, nargs="*", default=None)
-    parser.add_argument("--max-processes", type=int, default=4)
+    parser.add_argument("--max-processes", type=int, default=20)
     parser.add_argument("--min-processes", type=int, default=1)
     parser.add_argument("--ram-offset", type=float, default=2)
     parser.add_argument("--vram-offset", type=float, default=1)

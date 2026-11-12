@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 from ..data import SequenceDataset
 from ..models import TCNModel
 from ..trainers import SequenceTrainer, SequenceTrainerConfig
-from .launcher import Trial, TuningLauncher
+from .tuning_launcher import Trial, TuningLauncher
 from .sequence_training import SequenceTraining
 from .utils import (
     arguments,

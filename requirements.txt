@@ -9,3 +9,5 @@ h5py
 tqdm
 orjson
 sortedcontainers
+psutil
+nvidia-ml-py

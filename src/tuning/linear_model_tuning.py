@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from ..data import TabularDataset
 from ..models import LinearModel
 from ..trainers import TabularTrainer, TabularTrainerConfig
-from .launcher import Trial, TuningLauncher
+from .tuning_launcher import Trial, TuningLauncher
 from .tabular_training import TabularTraining
 from .utils import (
     arguments,
