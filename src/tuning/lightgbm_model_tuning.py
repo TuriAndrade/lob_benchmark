@@ -116,7 +116,7 @@ def main():
             model=LightGBMModel.load(checkpoint),
             task=args.task,
             data_mode=args.data_mode,
-            verbose=args.verbose,
+            verbose=False,
         )
     )
     evaluation = trainer.eval(test)

@@ -183,7 +183,7 @@ def main():
             device="auto",
             precision=args.precision,
             num_workers=best_params["trainer_params"].get("num_workers", 0),
-            verbose=args.verbose,
+            verbose=False,
         )
     )
 
